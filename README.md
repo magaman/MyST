@@ -1,2 +1,2 @@
 # MyST
-Code for various SMartthings Devices and Apps
+Code for various Smartthings Devices and Apps
