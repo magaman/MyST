@@ -8,20 +8,29 @@
  * 2019-09-07 - Fixed typo in auto off timer
  * 2019-10-12 - Updated with new device parameters
  * 2019-11-11 - Updated with latest device parameters, changed handling of double tap
- * 2019-11-16 - Add config reads, some cleanup
+ * 2019-12-07 - Fix for parm config report (no impact), updated supported command class versions
+ * 2019-12-10 - Fix for single tap scene control
+ * 2020-01-10 - Addition of 3-way switch type parameter
+ * 2020-02-03 - Fix for zero value in ramp rate
+ * 2020-02-13 - Fix for double tap settings
  *
  *  Supported Command Classes
- *         Association v2
- *         Association Group Information
- *         Central Scene
- *         Configuration
- *         Device Reset Local
- *         Manufacturer Specific v2
- *         Powerlevel
- *         Switch_all
- *         Switch_multilevel
- *         Version v2
- *         ZWavePlus Info v2
+ *   V2: Association
+ *   V1: Association Group Information (AGI)
+ *   V2: Basic   (ST Max V1)
+ *   V3: Central Scene   (ST Max V1)
+ *   V1: Configuration
+ *   V1: Device Reset Locally
+ *   V4: Firmware Update Meta Data   (ST Max V2)
+ *   V2: Manufacturer Specific
+ *   V3: Multi Channel Association   (ST Max V2)
+ *   V4: Multilevel Switch   (ST Max V3)
+ *   V1: Powerlevel
+ *   V1: Security 2
+ *   V1: Supervision
+ *   V2: Transport Service   (ST Max V1)
+ *   V3: Version   (ST Max V1)
+ *   V2: Z-Wave Plus Info
  *  
  *   Parm Size Description                                   Value
  *      1    1 Paddle Control                                0 (Default)-Upper paddle turns light on, 1-Lower paddle turns light on, 2-either paddle toggles on/off
@@ -31,7 +40,7 @@
  *      5    1 Auto Turn-On                                  0 (Default)-Timer disabled, 1-Timer enabled; Set time in parameter 6
  *      6    4 Turn-on Timer                                 60 (Default)-Time in minutes after turning off to automatically turn on (1-65535 minutes)
  *      8    1 Power Restore                                 2 (Default)-Remember state from pre-power failure, 0-Off after power restored, 1-On after power restore
- *      9    1 Physical Ramp Rate Control                    0 (Default)-Ramp rate in seconds to reach full brightness or off (1-99 seconds)
+ *      9    1 Physical Ramp Rate Control                    1 (Default)-Ramp rate in seconds to reach full brightness or off (0-99 seconds)
  *     10    1 Minimum Brightness                            1 (Default)-Minimum brightness that light will set (1-99%)
  *     11    1 Maximum Brightness                            99 (Default)-Maximum brightness that light will set (1-99%)
  *     12    1 Double Tap                                    0 (Default)-Light will go to full brightness with double tap, 1-light will go to max set in Parameter 11 with double tap 
@@ -122,6 +131,13 @@ metadata {
 					type: "text",
 					required: false
 					)
+		input (
+					type: "paragraph",
+					element: "paragraph",
+					title: "3-Way Switch type",
+					description: "Standard mechanical 3-way on/off switch - turns on/off to last brightness level; Enhanced mechanical 3-way on/off switch - tap the paddles once to change state (light on or off), tap the paddles twice quickly to turn light on to full brightness, tap the paddles quickly 3 times to enable a dimming sequence (the light will start dimming up and down in a loop) and tap the switch again to set the selected brightness level; Momentary Switch - click once to change status (light on or off), click twice quickly to turn light on to full brightness, press and hold to adjust brightness (dim up / dim down in sequence)."
+					)
+		input "type3way", "enum", title: "3-Way type ", options:["std": "Standard mechanical", "enh": "Enhanced mechanical", "moment": "Momentary"], defaultValue: "std",displayDuringSetup: false
 	}
 
 	tiles(scale: 2) {
@@ -175,10 +191,10 @@ def installed() {
 	cmds << parmGet(16)
 	cmds << parmGet(17)
 	cmds << parmGet(18)
-
+	cmds << parmGet(19)
 	def level = 99
 	cmds << zwave.basicV1.basicSet(value: level).format()
-	cmds << zwave.switchMultilevelV1.switchMultilevelGet().format()
+	cmds << zwave.switchMultilevelV3.switchMultilevelGet().format()
 	return response(delayBetween(cmds,200))
 }
 
@@ -197,7 +213,7 @@ def updated(){
 	def setOnTimer = 60
 	if (onTimer) {setOnTimer = onTimer}
 	def setRampRate = 1
-	if (rampRate) {setRampRate = rampRate}
+	if (rampRate!=null) {setRampRate = rampRate}
 	def setMaxBright = 99
 	if (maxBright) {setMaxBright = maxBright}
 	def setMinBright = 1
@@ -209,7 +225,7 @@ def updated(){
 		commands << mfrGet()
 		commands << zwave.versionV1.versionGet().format()
 		commands << zwave.basicV1.basicSet(value: level).format()
-		commands << zwave.switchMultilevelV1.switchMultilevelGet().format()
+		commands << zwave.switchMultilevelV3.switchMultilevelGet().format()
 	}
 	def setScene = sceneCtrl == true ? 1 : 0
 	def setDoubleTap = 0
@@ -223,11 +239,11 @@ def updated(){
 			setDoubleTap = 1
 			setDtapDisable = 0
 			break
-		case "tap2max":
+		case "tap1last":
 			setDoubleTap = 0
 			setDtapDisable = 1
 			break
-		case "tap1last":
+		case "tap1max":
 			setDoubleTap = 0
 			setDtapDisable = 2
 			break
@@ -292,7 +308,21 @@ def updated(){
 			setLedIndicator = 0
 			break
 	}
-
+	def setType3way = 0
+	switch (type3way) {
+		case "std":
+			setType3way = 0
+			break
+		case "enh":
+			setType3way = 1
+			break
+		case "moment":
+			setType3way = 2
+			break
+		default:
+			setType3way = 0
+			break
+	}
 	if (setScene) {
 	sendEvent(name: "numberOfButtons", value: 10, displayed: false)
 } else {
@@ -308,6 +338,7 @@ def updated(){
 	}
 	
 	//parmset takes the parameter number, it's size, and the value - in that order
+    commands << parmSet(19, 1, setType3way)
 	commands << parmSet(18, 1, setPhysDefBright)
 	commands << parmSet(17, 1, setZwaveontype)
 	commands << parmSet(16, 1, setPhysdimspeed)
@@ -326,6 +357,7 @@ def updated(){
 	commands << parmSet(2, 1, setLedIndicator)
 	commands << parmSet(1, 1, setPaddleControl)
 
+	commands << parmGet(19)
 	commands << parmGet(18)
 	commands << parmGet(17)
 	commands << parmGet(16)
@@ -350,23 +382,22 @@ def updated(){
 
 private getCommandClassVersions() {
 	[
-		0x59: 1,  // AssociationGrpInfo
 		0x85: 2,  // Association
-		0x5B: 1,  // Central Scene
-		0x5A: 1,  // DeviceResetLocally
-		0x72: 2,  // ManufacturerSpecific
-		0x73: 1,  // Powerlevel
-		0x86: 1,  // Version
-		0x5E: 2,  // ZwaveplusInfo
-		0x26: 2,  // Multilevel Switch
-		0x70: 1,  // Configuration
-		0x55: 1,  // Transport Service
-		0x6C: 1,  // Supervision
-		0x7A: 1,  // Firmware Update Metadata
-		0x8E: 1,  // Multi Channel Association
-		0x9F: 1,  // S2
+		0x59: 1,  // Association Group Information (AGI)
 		0x20: 1,  // Basic
-		0x27: 1,  // All Switch
+		0x5b: 1,  // Central Scene
+		0x70: 1,  // Configuration
+		0x5a: 1,  // Device Reset Locally
+		0x7a: 2,  // Firmware Update Meta Data
+		0x72: 2,  // Manufacturer Specific
+		0x8e: 2,  // Multi Channel Association
+		0x26: 3,  // Multilevel Switch
+		0x73: 1,  // Powerlevel
+		0x9f: 1,  // Security 2
+		0x6c: 1,  // Supervision
+		0x55: 1,  // Transport Service
+		0x86: 1,  // Version
+		0x5e: 2,  // Z-Wave Plus Info
 	]
 }
 
@@ -418,11 +449,11 @@ def zwaveEvent(physicalgraph.zwave.commands.associationv2.AssociationReport cmd)
 	}
 }
 
-def zwaveEvent(physicalgraph.zwave.commands.switchmultilevelv2.SwitchMultilevelReport cmd) {
+def zwaveEvent(physicalgraph.zwave.commands.switchmultilevelv3.SwitchMultilevelReport cmd) {
 	dimmerEvents(cmd)
 }
 
-def zwaveEvent(physicalgraph.zwave.commands.switchmultilevelv2.SwitchMultilevelSet cmd) {
+def zwaveEvent(physicalgraph.zwave.commands.switchmultilevelv3.SwitchMultilevelSet cmd) {
 	dimmerEvents(cmd)
 }
 
@@ -510,6 +541,7 @@ def zwaveEvent(physicalgraph.zwave.commands.configurationv1.ConfigurationReport 
 				default:
 					break
 			}
+			break
 		case 9:
 			name = "rampspeed"
 			value = reportValue
@@ -546,6 +578,7 @@ def zwaveEvent(physicalgraph.zwave.commands.configurationv1.ConfigurationReport 
 					value = "off"
 					break
 			}
+			break
 		case 15:
 			name = "local_control"
 			value = reportValue == 1 ? "true" : "false"
@@ -561,6 +594,23 @@ def zwaveEvent(physicalgraph.zwave.commands.configurationv1.ConfigurationReport 
 		case 18:
 			name = "def_brightness"
 			value = reportValue
+			break
+		case 19:
+			switch (reportValue) {
+				case 0:
+					value = "standard"
+					break
+				case 1:
+					value = "enhanced"
+					break
+				case 2:
+					value = "momentary"
+					break
+				default:
+					value = "standard"
+					break
+			}
+			name = "3wayswitchtype"
 			break
 		default:
 			break
@@ -585,8 +635,8 @@ def zwaveEvent(physicalgraph.zwave.commands.manufacturerspecificv2.ManufacturerS
 	createEvent([descriptionText: "$device.displayName MSR: $msr", isStateChange: false])
 }
 
-def zwaveEvent(physicalgraph.zwave.commands.switchmultilevelv1.SwitchMultilevelStopLevelChange cmd) {
-	[createEvent(name:"switch", value:"on"), response(zwave.switchMultilevelV1.switchMultilevelGet().format())]
+def zwaveEvent(physicalgraph.zwave.commands.switchmultilevelv3.SwitchMultilevelStopLevelChange cmd) {
+	[createEvent(name:"switch", value:"on"), response(zwave.switchMultilevelV3.switchMultilevelGet().format())]
 }
 
 def zwaveEvent(physicalgraph.zwave.commands.crc16encapv1.Crc16Encap cmd) {
@@ -610,8 +660,8 @@ def on() {
 	def dimmingDuration = state.dimDuration
 	log.debug "dimmingDuration: $dimmingDuration"
 	delayBetween([
-			zwave.switchMultilevelV2.switchMultilevelSet(value: level, dimmingDuration: dimmingDuration).format(),
-			zwave.switchMultilevelV1.switchMultilevelGet().format()
+			zwave.switchMultilevelV3.switchMultilevelSet(value: level, dimmingDuration: dimmingDuration).format(),
+			zwave.switchMultilevelV3.switchMultilevelGet().format()
 	],2000)
 }
 
@@ -620,8 +670,8 @@ def off() {
 	def dimmingDuration = state.dimDuration
 	log.debug "dimmingDuration: $dimmingDuration"
 	delayBetween([
-			zwave.switchMultilevelV2.switchMultilevelSet(value: level, dimmingDuration: dimmingDuration).format(),
-			zwave.switchMultilevelV1.switchMultilevelGet().format()
+			zwave.switchMultilevelV3.switchMultilevelSet(value: level, dimmingDuration: dimmingDuration).format(),
+			zwave.switchMultilevelV3.switchMultilevelGet().format()
 	],2000)
 }
 
@@ -635,7 +685,7 @@ def setLevel(value) {
 		sendEvent(name: "switch", value: "off")
 	}
 	sendEvent(name: "level", value: level, unit: "%")
-	delayBetween ([zwave.basicV1.basicSet(value: level).format(), zwave.switchMultilevelV1.switchMultilevelGet().format()], 2000)
+	delayBetween ([zwave.basicV1.basicSet(value: level).format(), zwave.switchMultilevelV3.switchMultilevelGet().format()], 2000)
 }
 
 def setLevel(value, duration) {
@@ -644,12 +694,12 @@ def setLevel(value, duration) {
 	def level = Math.max(Math.min(valueaux, 99), 0)
 	def dimmingDuration = duration < 128 ? duration : 128 + Math.round(duration / 60)
 	def getStatusDelay = duration < 128 ? (duration*1000)+2000 : (Math.round(duration / 60)*60*1000)+2000
-	delayBetween ([zwave.switchMultilevelV2.switchMultilevelSet(value: level, dimmingDuration: dimmingDuration).format(),
-				zwave.switchMultilevelV1.switchMultilevelGet().format()], getStatusDelay)
+	delayBetween ([zwave.switchMultilevelV3.switchMultilevelSet(value: level, dimmingDuration: dimmingDuration).format(),
+				zwave.switchMultilevelV3.switchMultilevelGet().format()], getStatusDelay)
 }
 
 def poll() {
-	zwave.switchMultilevelV1.switchMultilevelGet().format()
+	zwave.switchMultilevelV3.switchMultilevelGet().format()
 }
 
 /**
@@ -666,7 +716,7 @@ def refresh() {
 			commands << mfrGet()
 			commands << zwave.versionV1.versionGet().format()
 		}
-	commands << zwave.switchMultilevelV1.switchMultilevelGet().format()
+	commands << zwave.switchMultilevelV3.switchMultilevelGet().format()
 	delayBetween(commands,100)
 }
 
@@ -679,7 +729,6 @@ def zwaveEvent(physicalgraph.zwave.commands.centralscenev1.CentralSceneNotificat
 				case 0:
 					// Press Once
 						result += createEvent(tapDown1Response("physical"))
-						result += createEvent([name: "switch", value: "off", type: "physical"])
 						break
 					case 3: 
 						// 2 Times
@@ -707,7 +756,6 @@ def zwaveEvent(physicalgraph.zwave.commands.centralscenev1.CentralSceneNotificat
 				case 0:
 					// Press Once
 					result += createEvent(tapUp1Response("physical"))
-					result += createEvent([name: "switch", value: "on", type: "physical"]) 
 					break
 				case 3: 
 					// 2 Times
